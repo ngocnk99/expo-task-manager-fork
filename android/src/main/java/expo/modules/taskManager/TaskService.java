@@ -433,7 +433,7 @@ public class TaskService implements SingletonModule, TaskServiceInterface {
           mTasksAndEventsRepository.putEventForAppScopeKey(appScopeKey, body);
 
           Context context = mContextRef.get();
-          AppLoader appLoader = getAppLoader();
+          HeadlessAppLoader appLoader = getAppLoader();
 
           if (context == null || appLoader == null) {
               Log.w(TAG, "Context or AppLoader is null. Cannot load app: " + appScopeKey);
