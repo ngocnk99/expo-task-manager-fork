@@ -370,100 +370,116 @@ public class TaskService implements SingletonModule, TaskServiceInterface {
   }
 
   public void executeTask(TaskInterface task, Bundle data, Error error, TaskExecutionCallback callback) {
-    try {
-       // Kiểm tra task null trước khi sử dụng
+      // Kiểm tra task null trước khi sử dụng
       if (task == null) {
-        Log.e(TAG, "Cannot execute task: task is null");
-        // if (callback != null) {
-        //   Map<String, Object> errorResponse = new HashMap<>();
-        //   errorResponse.put("error", "Task is null");
-        //   callback.onFinished(errorResponse);
-        // }
-        return;
-      }
-      
-    
-      TaskManagerInterface taskManager = getTaskManager(task.getAppScopeKey());
-      
-      Bundle body = createExecutionEventBody(task, data, error);
-      if (body == null) {
-        Log.e(TAG, "Cannot execute task: failed to create execution body");
-        return;
-      }
-      Bundle executionInfo = body.getBundle("executionInfo");
-
-      if (executionInfo == null) {
-        // it should never happen, just to suppress warnings :)
-        return;
-      }
-
-      String eventId = executionInfo.getString("eventId");
-      if (eventId == null) {
-        eventId = "eventId"; // giá trị mặc định
+          Log.e(TAG, "Cannot execute task: task is null");
+          return;
       }
 
       String appScopeKey = task.getAppScopeKey();
-      if (appScopeKey == null) {
-        appScopeKey = "appScopeKey"; // giá trị mặc định
+      if (appScopeKey == null || appScopeKey.isEmpty()) {
+          Log.w(TAG, "AppScopeKey is null or empty, using default value");
+          appScopeKey = "defaultAppScopeKey";
       }
 
+      String eventId = null;
+      List<String> appEvents = null;
 
-      if (callback != null) {
-        sTaskCallbacks.put(eventId, callback);
-      }
+      try {
+          TaskManagerInterface taskManager = getTaskManager(appScopeKey);
+          
+          Bundle body = createExecutionEventBody(task, data, error);
+          if (body == null) {
+              Log.e(TAG, "Cannot execute task: failed to create execution body");
+              return;
+          }
+          
+          Bundle executionInfo = body.getBundle("executionInfo");
+          if (executionInfo == null) {
+              Log.e(TAG, "ExecutionInfo is null, cannot proceed");
+              return;
+          }
 
-      final List<String> appEvents;
-      if (sEvents.get(appScopeKey) == null) {
-        appEvents = new ArrayList<>();
-        appEvents.add(eventId);
-        sEvents.put(appScopeKey, appEvents);
-      } else {
-        appEvents = new ArrayList<>();
-        appEvents.add(eventId);
-      }
+          eventId = executionInfo.getString("eventId");
+          if (eventId == null || eventId.isEmpty()) {
+              Log.w(TAG, "EventId is null or empty, using default value");
+              eventId = "defaultEventId_" + System.currentTimeMillis();
+          }
 
-      if (taskManager != null) {
-        taskManager.executeTaskWithBody(body);
-        return;
-      }
+          // Lưu callback nếu có
+          if (callback != null) {
+              sTaskCallbacks.put(eventId, callback);
+          }
 
-      // The app is not fully loaded as its task manager is not there yet.
-      // We need to add event's body to the queue from which events will be executed once the task manager is ready.
-      if (!mTasksAndEventsRepository.hasEvents(appScopeKey)) {
-        mTasksAndEventsRepository.putEvents(appScopeKey, new ArrayList<>());
-      }
-      mTasksAndEventsRepository.putEventForAppScopeKey(appScopeKey, body);
+          // Quản lý danh sách events - sửa logic để tái sử dụng list hiện có
+          appEvents = sEvents.get(appScopeKey);
+          if (appEvents == null) {
+              appEvents = new ArrayList<>();
+              sEvents.put(appScopeKey, appEvents);
+          }
+          appEvents.add(eventId);
 
-      Context context = mContextRef.get();
-      AppLoader appLoader = getAppLoader();
+          // Thực thi task nếu taskManager có sẵn
+          if (taskManager != null) {
+              taskManager.executeTaskWithBody(body);
+              return;
+          }
 
-      if (context == null || appLoader == null) {
-        Log.w(TAG, "Context or AppLoader is null. Cannot load app: " + appScopeKey);
-        return;
-      }
+          // App chưa được load đầy đủ vì task manager chưa sẵn sàng
+          // Thêm event body vào queue để thực thi khi task manager sẵn sàng
+          if (!mTasksAndEventsRepository.hasEvents(appScopeKey)) {
+              mTasksAndEventsRepository.putEvents(appScopeKey, new ArrayList<>());
+          }
+          mTasksAndEventsRepository.putEventForAppScopeKey(appScopeKey, body);
 
+          Context context = mContextRef.get();
+          AppLoader appLoader = getAppLoader();
 
-  
-      getAppLoader().loadApp(mContextRef.get(), new HeadlessAppLoader.Params(appScopeKey, task.getAppUrl()), () -> {
-      }, success -> {
-        if (!success) {
-          sEvents.remove(appScopeKey);
+          if (context == null || appLoader == null) {
+              Log.w(TAG, "Context or AppLoader is null. Cannot load app: " + appScopeKey);
+              return;
+          }
+
+          // Load app
+          appLoader.loadApp(context, 
+              new HeadlessAppLoader.Params(appScopeKey, task.getAppUrl()), 
+              () -> {
+                  // onStart callback
+              }, 
+              success -> {
+                  if (!success) {
+                      Log.e(TAG, "Failed to load app: " + appScopeKey);
+                      sEvents.remove(appScopeKey);
+                      mTasksAndEventsRepository.removeEvents(appScopeKey);
+                      // Host unreachable? Unregister all tasks for that app
+                      unregisterAllTasksForAppScopeKey(appScopeKey);
+                  }
+              });
+
+      } catch (HeadlessAppLoader.AppConfigurationError e) {
+          Log.e(TAG, "App configuration error for appScopeKey: " + appScopeKey, e);
+          try {
+              unregisterTask(task.getName(), appScopeKey, null);
+          } catch (Exception ex) {
+              Log.e(TAG, "Error occurred while unregistering invalid task.", ex);
+          }
+
+          // Cleanup - sử dụng biến local đã khai báo
+          if (appEvents != null && eventId != null) {
+              appEvents.remove(eventId);
+          }
           mTasksAndEventsRepository.removeEvents(appScopeKey);
 
-          // Host unreachable? Unregister all tasks for that app.
-          unregisterAllTasksForAppScopeKey(appScopeKey);
-        }
-      });
-    } catch (HeadlessAppLoader.AppConfigurationError ignored) {
-      try {
-        unregisterTask(task.getName(), appScopeKey, null);
       } catch (Exception e) {
-        Log.e(TAG, "Error occurred while unregistering invalid task.", e);
+          Log.e(TAG, "Unexpected error during task execution", e);
+          // Cleanup resources khi có lỗi
+          if (appEvents != null && eventId != null) {
+              appEvents.remove(eventId);
+          }
+          if (eventId != null) {
+              sTaskCallbacks.remove(eventId);
+          }
       }
-
-      appEvents.remove(eventId);
-      mTasksAndEventsRepository.removeEvents(appScopeKey);
-    }
   }
 
   //endregion

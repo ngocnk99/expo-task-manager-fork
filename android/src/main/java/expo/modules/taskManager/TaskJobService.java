@@ -50,7 +50,7 @@ public class TaskJobService extends JobService {
       if (taskService == null) {
         return false;
       }
-      return taskService.cancelJob(this, params);;
+      return taskService.cancelJob(this, params);
     } catch (Exception e) {
       return false;
     }
