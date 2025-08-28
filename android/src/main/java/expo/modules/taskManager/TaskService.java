@@ -378,8 +378,7 @@ public class TaskService implements SingletonModule, TaskServiceInterface {
 
       String appScopeKey = task.getAppScopeKey();
       if (appScopeKey == null || appScopeKey.isEmpty()) {
-          Log.w(TAG, "AppScopeKey is null or empty, using default value");
-          appScopeKey = "defaultAppScopeKey";
+            return;
       }
 
       String eventId = null;
