@@ -1,4 +1,4 @@
-# expo-task-manager
+# expo-task-manager-fork1
 
 Expo universal module for TaskManager API.
 
@@ -18,7 +18,7 @@ For bare React Native projects, you must ensure that you have [installed and con
 ### Add the package to your npm dependencies
 
 ```
-npx expo install expo-task-manager
+npx expo install expo-task-manager-fork1
 ```
 
 #### Configure for Android
